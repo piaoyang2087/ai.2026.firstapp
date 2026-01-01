@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>像素文字小游戏</title>
     <style>
       :root {
@@ -57,6 +57,7 @@
         gap: 10px;
         align-items: end;
       }
+      .control.wide { grid-column: 1 / -1; }
       .control {
         display: flex;
         flex-direction: column;
@@ -94,8 +95,22 @@
         border-radius: 12px;
         padding: 12px;
       }
-      canvas { width: 100%; height: auto; display: block; background: transparent; }
+      canvas { width: 100%; height: auto; display: block; background: transparent; touch-action: none; }
       .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+
+      /* Mobile responsiveness */
+      @media (max-width: 900px) {
+        header { padding: 12px 14px; }
+        header h1 { font-size: 18px; }
+        .panel { grid-template-columns: 1fr; gap: 14px; }
+        .controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .control.wide { grid-column: 1 / -1; }
+        .buttons { width: 100%; }
+        .buttons button { flex: 1 1 auto; width: 100%; }
+      }
+      @media (max-width: 520px) {
+        .controls { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -106,7 +121,7 @@
 
     <section class="panel">
       <div class="controls">
-        <div class="control" style="grid-column: span 3;">
+        <div class="control wide">
           <label for="textInput">输入文字</label>
           <input id="textInput" type="text" placeholder="例如：2026新年快乐" value="2026新年快乐" />
         </div>
@@ -152,6 +167,7 @@
       const canvas = document.getElementById('canvas');
       const ctx = canvas.getContext('2d');
       let dpr = window.devicePixelRatio || 1;
+      const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
       function resizeCanvas(w, h) {
         canvas.width = Math.floor(w * dpr);
@@ -180,6 +196,7 @@
       let mode = 'idle'; // 'idle' | 'assemble' | 'scatter'
       let bgColor = bgInput.value;
       let pixelColor = colorInput.value;
+      const MAX_PARTICLES = isMobile ? 3500 : 8000;
 
       function renderTextToTargets(text, fontSize, cellSize, threshold) {
         const padX = Math.ceil(fontSize * 0.2);
@@ -235,7 +252,9 @@
         const p = [];
         const W = canvas.clientWidth;
         const H = canvas.clientHeight;
-        for (const t of tlist) {
+        const stride = Math.max(1, Math.ceil(tlist.length / MAX_PARTICLES));
+        for (let i = 0; i < tlist.length; i += stride) {
+          const t = tlist[i];
           p.push({
             x: Math.random() * W,
             y: -Math.random() * H * 0.5,
@@ -293,10 +312,10 @@
       }
 
       // Interactions
-      canvas.addEventListener('click', (e) => {
+      const handlePress = (e) => {
         const rect = canvas.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
+        const mx = (e.clientX ?? (e.touches && e.touches[0]?.clientX)) - rect.left;
+        const my = (e.clientY ?? (e.touches && e.touches[0]?.clientY)) - rect.top;
         const radius = 48;
         for (const p of particles) {
           const dx = p.x + p.size * 0.5 - mx;
@@ -311,7 +330,8 @@
             p.vy += ny * force;
           }
         }
-      });
+      };
+      canvas.addEventListener('pointerdown', handlePress, { passive: true });
 
       renderBtn.addEventListener('click', () => {
         const text = textInput.value.trim() || '像素艺术';
@@ -323,14 +343,22 @@
 
         const { targets: t, width, height } = renderTextToTargets(text, fontSize, cellSize, threshold);
 
-        // Resize canvas to fit text (plus margins)
+        // Fit-to-viewport: compute scale so text fully fits within canvas
         const margin = 20;
-        resizeCanvas(Math.min(width + margin * 2, 1200), Math.min(height + margin * 2, 600));
+        const vw = Math.min(window.innerWidth - 24, 1200);
+        const vh = Math.min(window.innerHeight - 24, 700);
+        const scaleX = (vw - margin * 2) / width;
+        const scaleY = (vh - margin * 2) / height;
+        const scale = Math.min(1, scaleX, scaleY);
 
-        // Center targets on canvas
-        const offsetX = ((canvas.width / dpr) - width) / 2;
-        const offsetY = ((canvas.height / dpr) - height) / 2;
-        targets = t.map(pt => ({ x: pt.x + offsetX, y: pt.y + offsetY, size: pt.size }));
+        const canvasW = Math.max(1, Math.floor(width * scale + margin * 2));
+        const canvasH = Math.max(1, Math.floor(height * scale + margin * 2));
+        resizeCanvas(canvasW, canvasH);
+
+        // Center scaled targets on canvas
+        const offsetX = ((canvas.width / dpr) - width * scale) / 2;
+        const offsetY = ((canvas.height / dpr) - height * scale) / 2;
+        targets = t.map(pt => ({ x: pt.x * scale + offsetX, y: pt.y * scale + offsetY, size: pt.size * scale }));
         particles = createParticlesFromTargets(targets);
         mode = 'assemble';
       });
@@ -358,11 +386,27 @@
 
       // Initial setup and start loop
       (function init() {
-        resizeCanvas(1000, 320);
+        if (isMobile) {
+          // Slightly larger cells for smoother perf on mobile
+          try { cellSizeInput.value = String(12); } catch {}
+        }
+        const initW = Math.min(window.innerWidth - 24, 1200);
+        const initH = clamp(Math.floor(window.innerHeight * 0.4), 220, 600);
+        resizeCanvas(initW, initH);
         drawBackground();
         requestAnimationFrame(loop);
       })();
+
+      // Responsive: re-render on resize/orientation change
+      window.addEventListener('resize', () => {
+        if (targets && targets.length) {
+          renderBtn.click();
+        } else {
+          const w = Math.min(window.innerWidth - 24, 1200);
+          const h = clamp(Math.floor(window.innerHeight * 0.4), 220, 600);
+          resizeCanvas(w, h);
+        }
+      }, { passive: true });
     </script>
   </body>
 </html>
-
