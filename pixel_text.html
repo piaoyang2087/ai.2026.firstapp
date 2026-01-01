@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>像素文字小游戏</title>
+    <style>
+      :root {
+        --bg: #101216;
+        --fg: #ff3b3b;
+        --accent: #4a90e2;
+        --panel: #1a1f27;
+        --text: #e6edf3;
+        --muted: #9aa6b2;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Microsoft YaHei", "Helvetica Neue", Arial, "Noto Sans CJK SC",
+          "PingFang SC", sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      header {
+        width: 100%;
+        max-width: 1100px;
+        padding: 16px 20px;
+      }
+      header h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        letter-spacing: 0.5px;
+      }
+      header p { margin: 0; color: var(--muted); font-size: 13px; }
+
+      .panel {
+        width: 100%;
+        max-width: 1100px;
+        background: var(--panel);
+        border: 1px solid #2a303a;
+        border-radius: 12px;
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 10px;
+        align-items: end;
+      }
+      .control {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .control label { font-size: 12px; color: var(--muted); }
+      input[type="text"], input[type="number"], input[type="color"], input[type="range"] {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #2a303a;
+        background: #0f1318;
+        color: var(--text);
+        outline: none;
+      }
+      input[type="range"] { padding: 0; }
+      .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+      button {
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #2a303a;
+        background: #12171d;
+        color: var(--text);
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+      .canvas-wrap {
+        width: 100%;
+        max-width: 1100px;
+        margin-top: 14px;
+        background: #0b0e13;
+        border: 1px solid #2a303a;
+        border-radius: 12px;
+        padding: 12px;
+      }
+      canvas { width: 100%; height: auto; display: block; background: transparent; }
+      .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>像素文字小游戏</h1>
+      <p>输入一句话，生成像素图；可点击画布让像素弹跳，或散开/聚合做出简单动画。</p>
+    </header>
+
+    <section class="panel">
+      <div class="controls">
+        <div class="control" style="grid-column: span 3;">
+          <label for="textInput">输入文字</label>
+          <input id="textInput" type="text" placeholder="例如：2026新年快乐" value="2026新年快乐" />
+        </div>
+        <div class="control">
+          <label for="fontSizeInput">字体大小</label>
+          <input id="fontSizeInput" type="number" min="24" max="256" value="140" />
+        </div>
+        <div class="control">
+          <label for="cellSizeInput">像素大小</label>
+          <input id="cellSizeInput" type="number" min="4" max="32" value="8" />
+        </div>
+        <div class="control">
+          <label for="thresholdInput">阈值</label>
+          <input id="thresholdInput" type="range" min="32" max="224" value="128" />
+        </div>
+        <div class="control">
+          <label for="colorInput">像素颜色</label>
+          <input id="colorInput" type="color" value="#ff3b3b" />
+        </div>
+        <div class="control">
+          <label for="bgInput">背景颜色</label>
+          <input id="bgInput" type="color" value="#101216" />
+        </div>
+      </div>
+      <div class="buttons">
+        <button id="renderBtn" class="primary">渲染</button>
+        <button id="assembleBtn">聚合</button>
+        <button id="scatterBtn">散开</button>
+        <button id="saveBtn">保存 PNG</button>
+      </div>
+    </section>
+
+    <section class="canvas-wrap">
+      <canvas id="canvas" width="1200" height="400"></canvas>
+      <div class="hint">提示：点击画布可以让附近像素弹跳；调整参数后重新点击“渲染”。</div>
+    </section>
+
+    <script>
+      // Utilities
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const lerp = (a, b, t) => a + (b - a) * t;
+
+      const canvas = document.getElementById('canvas');
+      const ctx = canvas.getContext('2d');
+      let dpr = window.devicePixelRatio || 1;
+
+      function resizeCanvas(w, h) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      // Controls
+      const textInput = document.getElementById('textInput');
+      const fontSizeInput = document.getElementById('fontSizeInput');
+      const cellSizeInput = document.getElementById('cellSizeInput');
+      const thresholdInput = document.getElementById('thresholdInput');
+      const colorInput = document.getElementById('colorInput');
+      const bgInput = document.getElementById('bgInput');
+
+      const renderBtn = document.getElementById('renderBtn');
+      const assembleBtn = document.getElementById('assembleBtn');
+      const scatterBtn = document.getElementById('scatterBtn');
+      const saveBtn = document.getElementById('saveBtn');
+
+      // Particle system
+      let particles = [];
+      let targets = [];
+      let mode = 'idle'; // 'idle' | 'assemble' | 'scatter'
+      let bgColor = bgInput.value;
+      let pixelColor = colorInput.value;
+
+      function renderTextToTargets(text, fontSize, cellSize, threshold) {
+        const padX = Math.ceil(fontSize * 0.2);
+        const padY = Math.ceil(fontSize * 0.2);
+
+        const off = document.createElement('canvas');
+        const octx = off.getContext('2d');
+
+        // Estimate width via measureText
+        octx.font = `${fontSize}px "Microsoft YaHei", "Segoe UI", Arial, sans-serif`;
+        octx.textBaseline = 'top';
+        const metrics = octx.measureText(text);
+        const textWidth = Math.ceil(metrics.width);
+        const textHeight = Math.ceil(fontSize + padY * 0.5);
+
+        off.width = textWidth + padX * 2;
+        off.height = textHeight + padY * 2;
+
+        // Draw
+        octx.fillStyle = '#ffffff';
+        octx.fillRect(0, 0, off.width, off.height);
+        octx.fillStyle = '#000000';
+        octx.font = `${fontSize}px "Microsoft YaHei", "Segoe UI", Arial, sans-serif`;
+        octx.textBaseline = 'top';
+        octx.fillText(text, padX, padY);
+
+        const img = octx.getImageData(0, 0, off.width, off.height);
+        const data = img.data;
+
+        const cols = Math.ceil(off.width / cellSize);
+        const rows = Math.ceil(off.height / cellSize);
+
+        const t = [];
+        for (let r = 0; r < rows; r++) {
+          for (let c = 0; c < cols; c++) {
+            const cx = c * cellSize + (cellSize >> 1);
+            const cy = r * cellSize + (cellSize >> 1);
+            if (cx >= off.width || cy >= off.height) continue;
+            const idx = (cy * off.width + cx) * 4;
+            const rch = data[idx];
+            const gch = data[idx + 1];
+            const bch = data[idx + 2];
+            const brightness = (rch + gch + bch) / 3; // white bg, black text
+            if (brightness <= threshold) {
+              t.push({ x: c * cellSize, y: r * cellSize, size: cellSize });
+            }
+          }
+        }
+        return { targets: t, width: cols * cellSize, height: rows * cellSize };
+      }
+
+      function createParticlesFromTargets(tlist) {
+        const p = [];
+        const W = canvas.clientWidth;
+        const H = canvas.clientHeight;
+        for (const t of tlist) {
+          p.push({
+            x: Math.random() * W,
+            y: -Math.random() * H * 0.5,
+            vx: (Math.random() - 0.5) * 6,
+            vy: Math.random() * 2,
+            tx: t.x,
+            ty: t.y,
+            size: t.size,
+            color: pixelColor,
+          });
+        }
+        return p;
+      }
+
+      function drawBackground() {
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+      }
+
+      function drawParticles() {
+        for (const p of particles) {
+          ctx.fillStyle = p.color;
+          ctx.fillRect(p.x, p.y, p.size, p.size);
+        }
+      }
+
+      function step() {
+        const friction = 0.92;
+        const attraction = 0.15; // assemble pull strength
+        const spread = 0.02; // small jitter
+
+        for (const p of particles) {
+          if (mode === 'assemble') {
+            const dx = p.tx - p.x;
+            const dy = p.ty - p.y;
+            p.vx += dx * attraction * 0.02;
+            p.vy += dy * attraction * 0.02;
+          } else if (mode === 'scatter') {
+            p.vx += (Math.random() - 0.5) * spread;
+            p.vy += (Math.random() - 0.5) * spread;
+          }
+
+          p.vx *= friction;
+          p.vy *= friction;
+          p.x += p.vx;
+          p.y += p.vy;
+        }
+      }
+
+      function loop() {
+        drawBackground();
+        step();
+        drawParticles();
+        requestAnimationFrame(loop);
+      }
+
+      // Interactions
+      canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const radius = 48;
+        for (const p of particles) {
+          const dx = p.x + p.size * 0.5 - mx;
+          const dy = p.y + p.size * 0.5 - my;
+          const dist2 = dx * dx + dy * dy;
+          if (dist2 < radius * radius) {
+            const d = Math.sqrt(dist2) + 0.0001;
+            const nx = dx / d;
+            const ny = dy / d;
+            const force = 6;
+            p.vx += nx * force;
+            p.vy += ny * force;
+          }
+        }
+      });
+
+      renderBtn.addEventListener('click', () => {
+        const text = textInput.value.trim() || '像素艺术';
+        const fontSize = clamp(parseInt(fontSizeInput.value || '120', 10), 24, 256);
+        const cellSize = clamp(parseInt(cellSizeInput.value || '8', 10), 4, 32);
+        const threshold = clamp(parseInt(thresholdInput.value || '128', 10), 0, 255);
+        pixelColor = colorInput.value || '#ff3b3b';
+        bgColor = bgInput.value || '#101216';
+
+        const { targets: t, width, height } = renderTextToTargets(text, fontSize, cellSize, threshold);
+
+        // Resize canvas to fit text (plus margins)
+        const margin = 20;
+        resizeCanvas(Math.min(width + margin * 2, 1200), Math.min(height + margin * 2, 600));
+
+        // Center targets on canvas
+        const offsetX = ((canvas.width / dpr) - width) / 2;
+        const offsetY = ((canvas.height / dpr) - height) / 2;
+        targets = t.map(pt => ({ x: pt.x + offsetX, y: pt.y + offsetY, size: pt.size }));
+        particles = createParticlesFromTargets(targets);
+        mode = 'assemble';
+      });
+
+      assembleBtn.addEventListener('click', () => {
+        mode = 'assemble';
+        // reset slight pull toward target
+        for (const p of particles) { p.vx *= 0.5; p.vy *= 0.5; }
+      });
+
+      scatterBtn.addEventListener('click', () => {
+        mode = 'scatter';
+        for (const p of particles) {
+          p.vx = (Math.random() - 0.5) * 10;
+          p.vy = (Math.random() - 0.5) * 10;
+        }
+      });
+
+      saveBtn.addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.download = `pixel_text_${Date.now()}.png`;
+        a.href = canvas.toDataURL('image/png');
+        a.click();
+      });
+
+      // Initial setup and start loop
+      (function init() {
+        resizeCanvas(1000, 320);
+        drawBackground();
+        requestAnimationFrame(loop);
+      })();
+    </script>
+  </body>
+</html>
+
